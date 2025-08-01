@@ -14,12 +14,6 @@ from douyin_scraper.douyin.web.models import PostDetail
 from douyin_scraper.douyin.web.utils import BogusManager
 
 async def main():
-    sampled_path = './data/douyin_sampled_videos.parquet.zstd'
-    if os.path.exists(sampled_path):
-        sampled_df = pl.read_parquet(sampled_path)
-    else:
-        sampled_df = pl.DataFrame({'aweme_id': [], 'result': []})
-
     video_df = pl.read_parquet('./data/douyin_related_videos.parquet.zstd', columns=['aweme_id'])
     video_df = video_df.with_columns([
         pl.col('aweme_id').cast(pl.UInt64).map_elements(lambda i: format(i, '064b'), pl.String).alias('aweme_id_bits')
@@ -53,18 +47,8 @@ async def main():
 
     pbar = tqdm()
     all_results = []
-    while True:
-        if milliseconds >= 1000:
-            milliseconds = 0
-            current_time += datetime.timedelta(seconds=1)
-        timestamp_bits = format(int(current_time.timestamp()), '032b')
-        milliseconds_bits = format(milliseconds, '010b')
-        all_bits = timestamp_bits + milliseconds_bits + sections[0]
-        aweme_id = str(int(all_bits, 2))
-
-        if aweme_id in sampled_df['aweme_id'].to_list():
-            milliseconds += 1
-            continue
+    for video in video_df.to_dicts():
+        aweme_id = video['aweme_id']
 
         pbar.update(1)
 
@@ -85,14 +69,6 @@ async def main():
                 })
         except Exception as e:
             print(f"Error fetching data for video ID {aweme_id}: {e}")
-
-        if len(all_results) > 10:
-            sampled_df = pl.concat([sampled_df, pl.from_dicts(all_results)], how='diagonal_relaxed')
-            all_results = []
-            sampled_df.write_parquet(sampled_path, compression='zstd')
-            sampled_df.write_parquet(sampled_path.replace('videos', 'videos_bckup'), compression='zstd')
-
-        milliseconds += 1
 
 if __name__ == "__main__":
     asyncio.run(main())

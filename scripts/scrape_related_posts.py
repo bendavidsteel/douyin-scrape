@@ -15,6 +15,8 @@ async def main():
         user_video_df = pl.read_parquet(user_posts_path)
         video_df = pl.concat([user_video_df, video_df], how='diagonal_relaxed').unique(subset=['aweme_id'])
 
+    print(f"Starting with {video_df.shape[0]} videos.")
+
     crawler = DouyinWebCrawler()
 
     all_results = []
@@ -36,6 +38,8 @@ async def main():
 
     df = pl.concat([video_df, pl.from_dicts(all_results, infer_schema_length=len(all_results))], how='diagonal_relaxed')\
         .unique(subset=['aweme_id'])
+    
+    print(f"Total videos after merging: {df.shape[0]}")
         
     if 'duet_origin_item' in df.columns:
         df = df.drop('duet_origin_item')
