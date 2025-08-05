@@ -15,12 +15,26 @@ async def main():
         user_video_df = pl.read_parquet(user_posts_path)
         video_df = pl.concat([user_video_df, video_df], how='diagonal_relaxed').unique(subset=['aweme_id'])
 
+    with open('./data/keywords.txt', 'r') as f:
+        keywords_lines = f.readlines()
+
+    all_keywords = []
+    for line in keywords_lines:
+        keywords, explanation = line.split('(')
+        keywords = keywords.split('or')
+        keywords = [k.strip() for k in keywords]
+        all_keywords.extend(keywords)
+
     print(f"Starting with {video_df.shape[0]} videos.")
+
+    interesting_sample_df = video_df.filter(pl.col('desc').str.contains_any(all_keywords)).sample(400)
+    general_sample_df = video_df.filter(~pl.col('desc').str.contains_any(all_keywords)).sample(100)
+    sample_df = pl.concat([interesting_sample_df, general_sample_df], how='diagonal_relaxed')
 
     crawler = DouyinWebCrawler()
 
     all_results = []
-    for video in tqdm(video_df.sample(500).to_dicts()):
+    for video in tqdm(sample_df.to_dicts()):
         video_id = video['aweme_id']
         try:
             result = await crawler.fetch_related_videos(video_id)
