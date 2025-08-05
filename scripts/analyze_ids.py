@@ -3,7 +3,7 @@ import polars as pl
 from datetime import datetime
 
 def main():
-    video_df = pl.read_parquet('douyin_related_videos.parquet.zstd')
+    video_df = pl.read_parquet('./data/douyin_related_videos.parquet.zstd', columns=['aweme_id'])
     video_df = video_df.with_columns([
         pl.col('aweme_id').cast(pl.UInt64).map_elements(lambda i: format(i, '064b'), pl.String).alias('aweme_id_bits')
     ]).with_columns([
