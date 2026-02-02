@@ -11,21 +11,42 @@ class AsyncDouyinScraper:
     def __init__(self, num_workers=10, batch_size=10):
         self.num_workers = num_workers
         self.batch_size = batch_size
-        self.sampled_path = './data/douyin_sample_related_videos.parquet.zstd'
+        self.data_dir = './data/'
         self.work_queue = asyncio.Queue()
         self.results_queue = asyncio.Queue()
         self.processed_ids = set()
         self.save_lock = asyncio.Lock()
         self.pbar = tqdm()
         self.stop_workers = False
+        self.current_dataframes = {}
         
+    def get_dataframe_prefix(self, aweme_id):
+        """Extract first 8 digits from aweme_id for dataframe file naming"""
+        return aweme_id[:8]
+    
+    def get_dataframe_path(self, prefix):
+        """Get the path for a specific dataframe file"""
+        return f"{self.data_dir}{prefix}_sample_related_videos.parquet.ztsd"
+    
+    def load_dataframe(self, prefix):
+        """Load a specific dataframe by prefix"""
+        path = self.get_dataframe_path(prefix)
+        if os.path.exists(path):
+            return pl.read_parquet(path)
+        else:
+            return pl.DataFrame({'aweme_id': [], 'result': []})
+    
     async def load_data(self):
         """Load existing sampled data and video data"""
-        if os.path.exists(self.sampled_path):
-            self.sampled_df = pl.read_parquet(self.sampled_path)
-            self.processed_ids = set(self.sampled_df['aweme_id'].to_list())
-        else:
-            self.sampled_df = pl.DataFrame({'aweme_id': [], 'result': []})
+        # Load processed IDs from all existing dataframe files
+        self.processed_ids = set()
+        for filename in os.listdir(self.data_dir):
+            if filename.endswith('_sample_related_videos.parquet.ztsd'):
+                try:
+                    df = pl.read_parquet(f"{self.data_dir}{filename}", columns=['aweme_id'])
+                    self.processed_ids.update(df['aweme_id'].to_list())
+                except Exception as e:
+                    print(f"Warning: Could not load {filename}: {e}")
             
         video_df = pl.read_parquet('./data/douyin_related_videos.parquet.zstd', columns=['aweme_id'])
         video_df = video_df.with_columns([
@@ -121,16 +142,36 @@ class AsyncDouyinScraper:
             await self.save_batch(all_results)
             
     async def save_batch(self, results):
-        """Save a batch of results to parquet file"""
-        async with self.save_lock:
-            new_df = pl.from_dicts(results, infer_schema_length=len(results), strict=False)
-            self.sampled_df = pl.concat([self.sampled_df, new_df], how='diagonal_relaxed')
+        """Save a batch of results to appropriate parquet files"""
+        if not results:
+            return
             
-            self.sampled_df.write_parquet(self.sampled_path, compression='zstd')
-            self.sampled_df.write_parquet(
-                self.sampled_path.replace('videos', 'videos_bckup'), 
-                compression='zstd'
-            )
+        async with self.save_lock:
+            # Group results by prefix (first 8 digits of aweme_id)
+            grouped_results = {}
+            for result in results:
+                prefix = self.get_dataframe_prefix(result['aweme_id'])
+                if prefix not in grouped_results:
+                    grouped_results[prefix] = []
+                grouped_results[prefix].append(result)
+            
+            # Save each group to its corresponding file
+            for prefix, group_results in grouped_results.items():
+                # Load or get existing dataframe for this prefix
+                if prefix not in self.current_dataframes:
+                    self.current_dataframes[prefix] = self.load_dataframe(prefix)
+                
+                new_df = pl.from_dicts(group_results, infer_schema_length=len(group_results), strict=False)
+                self.current_dataframes[prefix] = pl.concat([self.current_dataframes[prefix], new_df], how='diagonal_relaxed')
+                
+                # Save to file
+                path = self.get_dataframe_path(prefix)
+                self.current_dataframes[prefix].write_parquet(path, compression='zstd')
+
+            # delete unused dataframes to free memory
+            for prefix in list(self.current_dataframes.keys()):
+                if prefix not in grouped_results:
+                    del self.current_dataframes[prefix]
             
     async def run(self):
         """Main execution method"""
@@ -159,9 +200,6 @@ class AsyncDouyinScraper:
             # Wait for tasks to complete
             await asyncio.gather(*tasks, return_exceptions=True)
             
-            # Final save
-            await self.save_batch([])
-            
         finally:
             self.pbar.close()
             print("Scraping completed.")
@@ -169,7 +207,7 @@ class AsyncDouyinScraper:
 
 async def main():
     # Adjust num_workers based on your API rate limits and system capabilities
-    scraper = AsyncDouyinScraper(num_workers=8, batch_size=256)
+    scraper = AsyncDouyinScraper(num_workers=8, batch_size=4096)
     await scraper.run()
 
 
